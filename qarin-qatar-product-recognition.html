@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>قارن قطر — التعرف على المنتجات والأسعار</title>
+<style>
+*{box-sizing:border-box;font-family:system-ui,'Segoe UI',Tahoma,sans-serif}
+body{margin:0;background:#0b1220;color:#e8eefc}
+header{padding:18px;background:linear-gradient(135deg,#123a6b,#0b1220);text-align:center}
+h1{margin:0;font-size:22px}
+main{max-width:760px;margin:auto;padding:16px}
+.card{background:#111c31;border:1px solid #22314f;border-radius:16px;padding:16px;margin-bottom:14px}
+button{background:#1f6feb;color:white;border:0;border-radius:12px;padding:12px 16px;font-size:15px;cursor:pointer;width:100%;margin:6px 0}
+button.secondary{background:#243b55}
+input,select{width:100%;padding:12px;border-radius:10px;border:1px solid #33475f;background:#0d1729;color:#e8eefc;margin:6px 0}
+img{max-width:100%;border-radius:12px;display:block;margin:10px auto}
+.result{background:#0d1729;border:1px solid #2b3f5d;border-radius:12px;padding:12px;margin-top:10px;white-space:pre-wrap}
+a{color:#7cc4ff}
+.small{font-size:12px;color:#9fb0c9}
+</style>
+</head>
+<body>
+<header><h1>قارن قطر</h1><div class="small">صوّر منتجًا أو اختر صورة من الاستوديو لمعرفة اسمه وسعره في قطر</div></header>
+<main>
+<div class="card">
+<button onclick="openCamera()">📷 التقاط صورة بالكاميرا</button>
+<button class="secondary" onclick="document.getElementById('fileInput').click()">🖼️ اختيار صورة من الاستوديو</button>
+<input type="file" id="fileInput" accept="image/*" style="display:none" onchange="pickImage(this)">
+<video id="camera" autoplay playsinline style="display:none;width:100%;border-radius:12px"></video>
+<canvas id="canvas" style="display:none"></canvas>
+<img id="preview" style="display:none">
+<button id="analyzeBtn" style="display:none" onclick="analyze()">🔍 تعرّف على المنتج واحصل على السعر</button>
+</div>
+
+<div class="card">
+<label>مفتاح Google Gemini API (اختياري — للتعرف التلقائي على الصورة)</label>
+<input id="apiKey" type="password" placeholder="AIza...">
+<div class="small">يُحفظ المفتاح في متصفحك فقط. بدون مفتاح، سيفتح التطبيق Google Lens لتحديد المنتج من الصورة.</div>
+</div>
+
+<div class="card" id="resultCard" style="display:none">
+<h3>النتيجة</h3>
+<div id="result" class="result"></div>
+<div id="links"></div>
+</div>
+</main>
+
+<script>
+let stream=null,imageData=null;
+
+async function openCamera(){
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  const v=document.getElementById('camera');
+  v.style.display='block';v.srcObject=stream;
+  setTimeout(()=>capture(v),1200);
+ }catch(e){alert('تعذر فتح الكاميرا: '+e.message)}
+}
+
+function capture(video){
+ const c=document.getElementById('canvas');
+ c.width=video.videoWidth;c.height=video.videoHeight;
+ c.getContext('2d').drawImage(video,0,0);
+ imageData=c.toDataURL('image/jpeg',0.9);
+ stopCamera();showPreview(imageData);
+}
+
+function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}document.getElementById('camera').style.display='none'}
+
+function pickImage(input){
+ const f=input.files[0];if(!f)return;
+ const r=new FileReader();
+ r.onload=e=>{imageData=e.target.result;showPreview(imageData)};
+ r.readAsDataURL(f);
+}
+
+function showPreview(data){
+ const p=document.getElementById('preview');p.src=data;p.style.display='block';
+ document.getElementById('analyzeBtn').style.display='block';
+}
+
+async function analyze(){
+ if(!imageData){alert('اختر صورة أولًا');return}
+ const key=document.getElementById('apiKey').value.trim();
+ const out=document.getElementById('result');
+ const card=document.getElementById('resultCard');
+ card.style.display='block';
+ out.textContent='جارٍ تحليل الصورة...';
+
+ if(!key){
+  out.textContent='لم يتم إدخال مفتاح Gemini.\nسيتم فتح Google Lens لتحديد المنتج من الصورة، ثم يمكنك نسخ اسم المنتج والبحث عن سعره في قطر.';
+  const q=encodeURIComponent('سعر المنتج في قطر');
+  document.getElementById('links').innerHTML=link('فتح Google Lens','https://lens.google.com/uploadbyurl?url='+encodeURIComponent(''))+link('بحث Google قطر','https://www.google.com/search?q='+q+'&gl=QA&hl=ar');
+  return;
+ }
+
+ try{
+  const base64=imageData.split(',')[1];
+  const prompt='حدد المنتج في الصورة. أعد النتيجة فقط بصيغة JSON: {"name":"اسم المنتج بالعربية","brand":"العلامة التجارية","model":"الموديل إن وجد","category":"الفئة"}. إذا لم تكن متأكدًا اكتب null.';
+  const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key='+encodeURIComponent(key),{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({contents:[{parts:[{text:prompt},{inline_data:{mime_type:'image/jpeg',data:base64}}]}]})
+  });
+  const j=await res.json();
+  const text=j?.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  let product={name:'',brand:'',model:'',category:''};
+  try{const m=text.match(/\{[\s\S]*\}/);product=JSON.parse(m[0])}catch(e){product.name=text.trim()}
+  const name=product.name||'منتج غير محدد';
+  const q=encodeURIComponent(name+' سعر قطر');
+  out.textContent='المنتج: '+name+'\nالعلامة: '+(product.brand||'غير معروف')+'\nالموديل: '+(product.model||'غير معروف');
+  document.getElementById('links').innerHTML=
+   link('بحث سعر المنتج في قطر','https://www.google.com/search?hl=ar&gl=QA&q='+q)+
+   link('Google Shopping قطر','https://www.google.com/search?tbm=shop&hl=ar&gl=QA&q='+encodeURIComponent(name))+
+   link('Google Lens','https://lens.google.com/');
+ }catch(e){
+  out.textContent='حدث خطأ أثناء التحليل:\n'+e.message+'\n\nيمكنك استخدام Google Lens بدلًا من ذلك.';
+  document.getElementById('links').innerHTML=link('فتح Google Lens','https://lens.google.com/');
+ }
+}
+
+function link(t,u){return '<p><a href="'+u+'" target="_blank" rel="noopener">'+t+'</a></p>'}
+</script>
+</body>
+</html>
